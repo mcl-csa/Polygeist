@@ -15,6 +15,9 @@
 #include "clang/Sema/Sema.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallVector.h"
+#include <clang/AST/Stmt.h>
+#include <list>
 
 /// POD holds information processed from the lower_to pragma.
 struct LowerToInfo {
@@ -88,9 +91,43 @@ struct ScopLocList {
   }
 };
 
+enum PragmaTarget { loop, alloc };
+
+struct HLSInfo {
+  HLSInfo(clang::SourceLocation loc, PragmaTarget target)
+      : loc(loc), target(target), unroll(false), visited(false) {}
+  clang::SourceLocation loc;
+  PragmaTarget target;
+  llvm::Optional<unsigned int> initiationInterval;
+  bool unroll;
+  bool visited;
+};
+
+struct HLSInfoList {
+public:
+  void addPragmaInfo(HLSInfo info) { infoList.push_back(info); }
+
+  llvm::SmallVector<HLSInfo, 4> extractPragmas(clang::SourceLocation beginLoc,
+                                               clang::SourceLocation endLoc) {
+    llvm::SmallVector<HLSInfo, 4> out;
+    for (auto &info : infoList) {
+      if (info.target == PragmaTarget::loop && !info.visited &&
+          info.loc > beginLoc && info.loc < endLoc) {
+        out.push_back(info);
+        info.visited = true;
+      }
+    }
+    return out;
+  }
+
+private:
+  llvm::SmallVector<HLSInfo, 4> infoList;
+};
+
 void addPragmaLowerToHandlers(clang::Preprocessor &PP, LowerToInfo &LTInfo);
 void addPragmaScopHandlers(clang::Preprocessor &PP, ScopLocList &scopLocList);
 void addPragmaEndScopHandlers(clang::Preprocessor &PP,
                               ScopLocList &scopLocList);
+void addPragmaHLSHandler(clang::Preprocessor &PP, HLSInfoList &infoList);
 
 #endif

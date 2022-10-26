@@ -68,6 +68,7 @@ struct MLIRASTConsumer : public ASTConsumer {
   bool error;
   ScopLocList scopLocList;
   LowerToInfo LTInfo;
+  HLSInfoList hlsInfoList;
 
   /// The stateful type translator (contains named structs).
   LLVM::TypeFromLLVMIRTranslator typeTranslator;
@@ -96,6 +97,7 @@ struct MLIRASTConsumer : public ASTConsumer {
     addPragmaScopHandlers(PP, scopLocList);
     addPragmaEndScopHandlers(PP, scopLocList);
     addPragmaLowerToHandlers(PP, LTInfo);
+    addPragmaHLSHandler(PP, hlsInfoList);
   }
 
   ~MLIRASTConsumer() {}

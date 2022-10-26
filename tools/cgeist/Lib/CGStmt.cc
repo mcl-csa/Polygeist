@@ -201,6 +201,19 @@ void MLIRScanner::buildAffineLoopImpl(
   // TODO: set the value of the iteration value to the final bound at the
   // end of the loop.
   builder.setInsertionPoint(oldblock, oldpoint);
+
+  // Add pragma HLS attributes.
+  auto infoList =
+      Glob.hlsInfoList.extractPragmas(fors->getBeginLoc(), fors->getEndLoc());
+  for (auto info : infoList) {
+    if (info.unroll == true) {
+      affineOp->setAttr("HLS_UNROLL", builder.getI64IntegerAttr(-1));
+    }
+    if (info.initiationInterval.has_value()) {
+      affineOp->setAttr("HLS_PIPELINE",
+                        builder.getI64IntegerAttr(*info.initiationInterval));
+    }
+  }
 }
 
 void MLIRScanner::buildAffineLoop(

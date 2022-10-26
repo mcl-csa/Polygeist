@@ -10,6 +10,7 @@
 #include "clang/AST/AST.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/Attr.h"
+#include "clang/Basic/TokenKinds.h"
 #include "clang/Frontend/FrontendPluginRegistry.h"
 #include "clang/Lex/LexDiagnostic.h"
 #include "clang/Lex/LiteralSupport.h"
@@ -233,6 +234,37 @@ struct PragmaEndScopHandler : public PragmaHandler {
   }
 };
 
+struct PragmaHLSHandler : public PragmaHandler {
+  HLSInfoList &infoList;
+  PragmaHLSHandler(HLSInfoList &infoList)
+      : PragmaHandler("HLS"), infoList(infoList) {}
+  void HandlePragma(Preprocessor &PP, PragmaIntroducer introducer,
+                    Token &hlsTok) override {
+
+    auto loc = hlsTok.getLocation();
+    auto &SM = PP.getSourceManager();
+    HLSInfo info(loc, PragmaTarget::loop);
+
+    PP.Lex(hlsTok);
+    auto pragmaName = hlsTok.getIdentifierInfo()->getName().upper();
+    if (pragmaName == "UNROLL") {
+      info.unroll = true;
+    } else if (pragmaName == "PIPELINE") {
+      PP.Lex(hlsTok);
+      assert(hlsTok.getIdentifierInfo()->getName() == "II");
+      PP.Lex(hlsTok);
+      assert(hlsTok.is(tok::TokenKind::equal));
+      PP.Lex(hlsTok);
+      auto strII = std::string(hlsTok.getLiteralData());
+      info.initiationInterval = stoi(strII);
+      assert(*info.initiationInterval > 0);
+    } else {
+      return;
+    }
+
+    infoList.addPragmaInfo(info);
+  }
+};
 } // namespace
 
 void addPragmaLowerToHandlers(Preprocessor &PP, LowerToInfo &LTInfo) {
@@ -245,4 +277,8 @@ void addPragmaScopHandlers(Preprocessor &PP, ScopLocList &scopLocList) {
 
 void addPragmaEndScopHandlers(Preprocessor &PP, ScopLocList &scopLocList) {
   PP.AddPragmaHandler(new PragmaEndScopHandler(scopLocList));
+}
+
+void addPragmaHLSHandler(clang::Preprocessor &PP, HLSInfoList &infoList) {
+  PP.AddPragmaHandler(new PragmaHLSHandler(infoList));
 }
