@@ -18,6 +18,8 @@
 #include "llvm/ADT/SmallVector.h"
 #include <clang/AST/Stmt.h>
 #include <list>
+#include <llvm/ADT/SmallString.h>
+#include <variant>
 
 /// POD holds information processed from the lower_to pragma.
 struct LowerToInfo {
@@ -91,28 +93,147 @@ struct ScopLocList {
   }
 };
 
-enum PragmaTarget { loop, alloc };
+enum PragmaKind {
+  region, // Applies to the parent op of the region in which pragma is defined.
+  named   // Applies to a named entity such as variable name.
+};
+
+struct HLSPragmaInfo {
+
+  HLSPragmaInfo(clang::SourceLocation loc, PragmaKind pragmaKind,
+                llvm::StringRef pragmaAttrName)
+      : loc(loc), pragmaKind(pragmaKind), pragmaAttrName(pragmaAttrName) {}
+  clang::SourceLocation loc;
+  PragmaKind pragmaKind;
+  std::string pragmaAttrName;
+};
+
+struct HLSUnrollInfo : public HLSPragmaInfo {
+  HLSUnrollInfo(clang::SourceLocation loc, unsigned int factor)
+      : HLSPragmaInfo(loc, PragmaKind::region, "HLS_UNROLL"), factor(factor) {}
+  unsigned int factor;
+};
+
+struct HLSPipelineInfo : public HLSPragmaInfo {
+  HLSPipelineInfo(clang::SourceLocation loc, unsigned int initiationInterval)
+      : HLSPragmaInfo(loc, PragmaKind::region, "HLS_PIPELINE"),
+        initiationInterval(initiationInterval) {}
+  unsigned int initiationInterval;
+};
+
+struct HLSStorageInfo : public HLSPragmaInfo {
+  HLSStorageInfo(clang::SourceLocation loc, llvm::StringRef name,
+                 llvm::StringRef type, llvm::StringRef impl,
+                 unsigned int latency)
+      : HLSPragmaInfo(loc, PragmaKind::named, "HLS_STORAGE"), name(name),
+        type(type), impl(impl), latency(latency) {}
+  llvm::SmallString<4> name;
+  llvm::SmallString<8> type;
+  llvm::SmallString<8> impl;
+  unsigned int latency;
+};
+
+struct HLSArrayPartitionInfo : public HLSPragmaInfo {
+  HLSArrayPartitionInfo(clang::SourceLocation loc, llvm::StringRef name,
+                        unsigned int partitionDim)
+      : HLSPragmaInfo(loc, PragmaKind::named, "HLS_ARRAY_PARTITION"),
+        name(name), partitionDim(partitionDim) {}
+  llvm::SmallString<4> name;
+  unsigned int partitionDim;
+};
+
+struct HLSExternFuncInfo : public HLSPragmaInfo {
+  HLSExternFuncInfo(clang::SourceLocation loc, llvm::StringRef name,
+                    unsigned int latency)
+      : HLSPragmaInfo(loc, PragmaKind::named, "HLS_EXTERN_FUNC"), name(name),
+        latency(latency) {}
+  llvm::SmallString<4> name;
+  unsigned int latency;
+};
+
+typedef std::variant<HLSUnrollInfo, HLSPipelineInfo, HLSStorageInfo,
+                     HLSArrayPartitionInfo, HLSExternFuncInfo>
+    HLSPragmaVariant;
 
 struct HLSInfo {
-  HLSInfo(clang::SourceLocation loc, PragmaTarget target)
-      : loc(loc), target(target), unroll(false), visited(false) {}
-  clang::SourceLocation loc;
-  PragmaTarget target;
-  llvm::Optional<unsigned int> initiationInterval;
-  bool unroll;
+  HLSInfo(HLSPragmaVariant v) : v(v), visited(false) {}
+  HLSPragmaVariant v;
   bool visited;
+  clang::SourceLocation getSrcLoc() {
+    if (std::holds_alternative<HLSUnrollInfo>(v))
+      return std::get<HLSUnrollInfo>(v).loc;
+    if (std::holds_alternative<HLSPipelineInfo>(v))
+      return std::get<HLSPipelineInfo>(v).loc;
+    if (std::holds_alternative<HLSStorageInfo>(v))
+      return std::get<HLSStorageInfo>(v).loc;
+    if (std::holds_alternative<HLSArrayPartitionInfo>(v))
+      return std::get<HLSArrayPartitionInfo>(v).loc;
+    if (std::holds_alternative<HLSExternFuncInfo>(v))
+      return std::get<HLSExternFuncInfo>(v).loc;
+    assert(false && "Unreachable");
+  }
+
+  PragmaKind getPragmaKind() {
+    if (std::holds_alternative<HLSUnrollInfo>(v))
+      return std::get<HLSUnrollInfo>(v).pragmaKind;
+    if (std::holds_alternative<HLSPipelineInfo>(v))
+      return std::get<HLSPipelineInfo>(v).pragmaKind;
+    if (std::holds_alternative<HLSStorageInfo>(v))
+      return std::get<HLSStorageInfo>(v).pragmaKind;
+    if (std::holds_alternative<HLSArrayPartitionInfo>(v))
+      return std::get<HLSArrayPartitionInfo>(v).pragmaKind;
+    if (std::holds_alternative<HLSExternFuncInfo>(v))
+      return std::get<HLSExternFuncInfo>(v).pragmaKind;
+    assert(false && "Unreachable");
+  }
+
+  llvm::StringRef getPragmaAttrName() {
+    if (std::holds_alternative<HLSUnrollInfo>(v))
+      return std::get<HLSUnrollInfo>(v).pragmaAttrName;
+    if (std::holds_alternative<HLSPipelineInfo>(v))
+      return std::get<HLSPipelineInfo>(v).pragmaAttrName;
+    if (std::holds_alternative<HLSStorageInfo>(v))
+      return std::get<HLSStorageInfo>(v).pragmaAttrName;
+    if (std::holds_alternative<HLSArrayPartitionInfo>(v))
+      return std::get<HLSArrayPartitionInfo>(v).pragmaAttrName;
+    if (std::holds_alternative<HLSExternFuncInfo>(v))
+      return std::get<HLSExternFuncInfo>(v).pragmaAttrName;
+    assert(false && "Unreachable");
+  }
+
+  llvm::StringRef getName() {
+    if (std::holds_alternative<HLSStorageInfo>(v))
+      return std::get<HLSStorageInfo>(v).name;
+    if (std::holds_alternative<HLSArrayPartitionInfo>(v))
+      return std::get<HLSArrayPartitionInfo>(v).name;
+    if (std::holds_alternative<HLSExternFuncInfo>(v))
+      return std::get<HLSExternFuncInfo>(v).name;
+    assert(false && "Unreachable");
+  }
 };
 
 struct HLSInfoList {
 public:
   void addPragmaInfo(HLSInfo info) { infoList.push_back(info); }
 
-  llvm::SmallVector<HLSInfo, 4> extractPragmas(clang::SourceLocation beginLoc,
-                                               clang::SourceLocation endLoc) {
+  llvm::SmallVector<HLSInfo, 4>
+  extractRegionPragmas(clang::SourceLocation beginLoc,
+                       clang::SourceLocation endLoc) {
     llvm::SmallVector<HLSInfo, 4> out;
     for (auto &info : infoList) {
-      if (info.target == PragmaTarget::loop && !info.visited &&
-          info.loc > beginLoc && info.loc < endLoc) {
+      if (info.getPragmaKind() == PragmaKind::region && !info.visited &&
+          info.getSrcLoc() > beginLoc && info.getSrcLoc() < endLoc) {
+        out.push_back(info);
+        info.visited = true;
+      }
+    }
+    return out;
+  }
+
+  llvm::SmallVector<HLSInfo, 4> getNamedPragmas(llvm::StringRef name) {
+    llvm::SmallVector<HLSInfo, 4> out;
+    for (auto &info : infoList) {
+      if (info.getPragmaKind() == PragmaKind::named && info.getName() == name) {
         out.push_back(info);
         info.visited = true;
       }

@@ -10,6 +10,7 @@
 #include "TypeUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/DLTI/DLTI.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Target/LLVMIR/Import.h"
 #include "utils.h"
@@ -33,6 +34,7 @@
 #include "clang/Frontend/Utils.h"
 #include "clang/Parse/ParseAST.h"
 #include "clang/Parse/Parser.h"
+#include "clang/Sema/HLSLExternalSemaSource.h"
 #include "clang/Sema/Sema.h"
 #include "clang/Sema/SemaDiagnostic.h"
 #include "llvm/Support/Debug.h"
@@ -354,6 +356,29 @@ void MLIRScanner::init(mlir::func::FuncOp function, const FunctionDecl *fd) {
 
 mlir::OpBuilder &MLIRScanner::getBuilder() { return builder; }
 
+void processAllocaOp(llvm::SmallVector<HLSInfo, 4> allocaInfoList,
+                     memref::AllocaOp alloca) {
+  Builder builder(alloca);
+  llvm::SmallVector<int64_t, 4> partitionDims;
+  for (auto info : allocaInfoList) {
+    if (std::holds_alternative<HLSStorageInfo>(info.v)) {
+      auto storageInfo = std::get<HLSStorageInfo>(info.v);
+      alloca->setAttr("HLS_STORAGE_TYPE",
+                      builder.getStringAttr(storageInfo.type));
+      alloca->setAttr("HLS_STORAGE_IMPL",
+                      builder.getStringAttr(storageInfo.impl));
+      alloca->setAttr("HLS_STORAGE_LATENCY",
+                      builder.getI64IntegerAttr(storageInfo.latency));
+    } else if (std::holds_alternative<HLSArrayPartitionInfo>(info.v)) {
+      auto arrayPartitionInfo = std::get<HLSArrayPartitionInfo>(info.v);
+      partitionDims.push_back(arrayPartitionInfo.partitionDim);
+    }
+  }
+  if (partitionDims.size() > 0)
+    alloca->setAttr("HLS_ARRAY_PARTITION_DIMS",
+                    builder.getI64ArrayAttr(partitionDims));
+}
+
 mlir::Value MLIRScanner::createAllocOp(mlir::Type t, VarDecl *name,
                                        uint64_t memspace, bool isArray = false,
                                        bool LLVMABI = false) {
@@ -416,13 +441,15 @@ mlir::Value MLIRScanner::createAllocOp(mlir::Type t, VarDecl *name,
     if (name)
       if (auto var = dyn_cast<VariableArrayType>(
               name->getType()->getUnqualifiedDesugaredType())) {
+
         assert(shape[0] == -1);
         mr = mlir::MemRefType::get(
             shape, mt.getElementType(), MemRefLayoutAttrInterface(),
             wrapIntegerMemorySpace(memspace, mt.getContext()));
         auto len = Visit(var->getSizeExpr()).getValue(varLoc, builder);
         len = builder.create<IndexCastOp>(varLoc, builder.getIndexType(), len);
-        alloc = builder.create<mlir::memref::AllocaOp>(varLoc, mr, len);
+        auto allocaOp = builder.create<mlir::memref::AllocaOp>(varLoc, mr, len);
+        alloc = allocaOp;
         builder.create<polygeist::TrivialUseOp>(varLoc, alloc);
         if (memspace != 0) {
           alloc = abuilder.create<polygeist::Pointer2MemrefOp>(
@@ -439,7 +466,12 @@ mlir::Value MLIRScanner::createAllocOp(mlir::Type t, VarDecl *name,
       mr = mlir::MemRefType::get(
           shape, mt.getElementType(), MemRefLayoutAttrInterface(),
           wrapIntegerMemorySpace(memspace, mt.getContext()));
-      alloc = abuilder.create<mlir::memref::AllocaOp>(varLoc, mr);
+      auto allocaOp = abuilder.create<mlir::memref::AllocaOp>(varLoc, mr);
+      if (name) {
+        auto allocaInfoList = Glob.hlsInfoList.getNamedPragmas(name->getName());
+        processAllocaOp(allocaInfoList, allocaOp);
+      }
+      alloc = allocaOp;
       if (memspace != 0) {
         alloc = abuilder.create<polygeist::Pointer2MemrefOp>(
             varLoc, mlir::MemRefType::get(shape, mt.getElementType()),
@@ -812,7 +844,6 @@ ValueCategory MLIRScanner::VisitVarDecl(clang::VarDecl *decl) {
   unsigned memtype = decl->hasAttr<CUDASharedAttr>() ? 5 : 0;
   bool LLVMABI = false;
   bool isArray = false;
-
   if (Glob.getMLIRType(
               Glob.CGM.getContext().getLValueReferenceType(decl->getType()))
           .isa<mlir::LLVM::LLVMPointerType>())
@@ -4718,6 +4749,7 @@ MLIRASTConsumer::GetOrCreateMLIRFunction(const FunctionDecl *FD,
 
   std::vector<mlir::Type> types;
   std::vector<std::string> names;
+  std::vector<llvm::StringRef> argNames;
 
   if (auto CC = dyn_cast<CXXMethodDecl>(FD)) {
     if (CC->isInstance()) {
@@ -4772,6 +4804,7 @@ MLIRASTConsumer::GetOrCreateMLIRFunction(const FunctionDecl *FD,
       types.push_back(t);
     }
     names.push_back(parm->getName().str());
+    argNames.push_back(parm->getName());
   }
 
   bool isArrayReturn = false;
@@ -4812,6 +4845,15 @@ MLIRASTConsumer::GetOrCreateMLIRFunction(const FunctionDecl *FD,
   attrs.set("llvm.linkage",
             mlir::LLVM::LinkageAttr::get(builder.getContext(), lnk));
   function->setAttrs(attrs.getDictionary(builder.getContext()));
+  function->setAttr("argNames", builder.getStrArrayAttr(argNames));
+  auto infoList = this->hlsInfoList.getNamedPragmas(FD->getName());
+  for (HLSInfo info : infoList) {
+    if (std::holds_alternative<HLSExternFuncInfo>(info.v)) {
+      auto externFuncInfo = std::get<HLSExternFuncInfo>(info.v);
+      function->setAttr("HLS_EXTERN_FUNC_LATENCY",
+                        builder.getI64IntegerAttr(externFuncInfo.latency));
+    }
+  }
 
   functions[name] = function;
   module->push_back(function);
