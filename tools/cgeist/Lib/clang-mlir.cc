@@ -4835,8 +4835,20 @@ MLIRASTConsumer::GetOrCreateMLIRFunction(const FunctionDecl *FD,
   }
   function->setAttr("arg_attrs", builder.getArrayAttr(argAttrs));
   auto infoList = this->hlsInfoList.getVarPragmas(FD->getName());
-  for (auto namedAttr : getHLSNamedAttrs(builder, infoList))
-    function->setAttr(namedAttr.getName(), namedAttr.getValue());
+  int latency = 0;
+  for (auto kv : infoList) {
+    if (kv.first == "hls.EXTERN_FUNC_LATENCY") {
+      latency = std::get<int>(kv.second);
+      break;
+    }
+  }
+  llvm::SmallVector<mlir::Attribute> resultAttrs;
+  for (size_t i = 0; i < function.getNumResults(); i++) {
+    resultAttrs.push_back(builder.getDictionaryAttr(builder.getNamedAttr(
+        "hls.INTERFACE_LATENCY", builder.getI64IntegerAttr(latency))));
+  }
+  if (resultAttrs.size() > 0)
+    function->setAttr("result_attrs", builder.getArrayAttr(resultAttrs));
 
   functions[name] = function;
   module->push_back(function);
