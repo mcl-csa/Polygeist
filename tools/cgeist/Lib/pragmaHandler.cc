@@ -276,7 +276,7 @@ struct PragmaHLSHandler : public PragmaHandler {
 
     PP.Lex(hlsTok);
     auto pragmaName = hlsTok.getIdentifierInfo()->getName().upper();
-    std::string prepend = "HLS_" + pragmaName + "_";
+    std::string prepend = "hls." + pragmaName + "_";
     SmallVector<std::pair<std::string, AttrKind>, 4> attrs =
         parsePragmaAttrs(PP, hlsTok, prepend);
     if (pragmaName == "UNROLL" || pragmaName == "PIPELINE") {
@@ -295,10 +295,22 @@ struct PragmaHLSHandler : public PragmaHandler {
 
       HLSPragmaInfo info(VarPragma(*name), attrs);
       infoList.addPragmaInfo(info);
+    } else if (pragmaName == "INTERFACE") {
+      std::optional<std::string> name;
+      for (auto kv : attrs) {
+        if (kv.first == prepend + "PORT" &&
+            std::holds_alternative<std::string>(kv.second))
+          name = std::get<std::string>(kv.second);
+      }
+      if (!name.has_value())
+        PP.Diag(hlsTok, diag::err_expected) << " port=<port name>";
+
+      HLSPragmaInfo info(VarPragma(*name), attrs);
+      infoList.addPragmaInfo(info);
     } else {
       PP.Diag(hlsTok.getLocation(), diag::warn_pragma_expected_identifier)
           << "HLS UNROLL | PIPELINE | BIND_STORAGE | ARRAY_PARTITION | "
-             "EXTERN_FUNC.";
+             "INTERFACE | EXTERN_FUNC.";
     }
   }
 };

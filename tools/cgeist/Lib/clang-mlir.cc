@@ -4826,6 +4826,14 @@ MLIRASTConsumer::GetOrCreateMLIRFunction(const FunctionDecl *FD,
 
   // HLS related attributes.
   function->setAttr("argNames", builder.getStrArrayAttr(argNames));
+  llvm::SmallVector<mlir::Attribute> argAttrs;
+  for (auto name : argNames) {
+    auto argInfoList = this->hlsInfoList.getVarPragmas(name);
+    auto argAttr =
+        builder.getDictionaryAttr(getHLSNamedAttrs(builder, argInfoList));
+    argAttrs.push_back(argAttr);
+  }
+  function->setAttr("arg_attrs", builder.getArrayAttr(argAttrs));
   auto infoList = this->hlsInfoList.getVarPragmas(FD->getName());
   for (auto namedAttr : getHLSNamedAttrs(builder, infoList))
     function->setAttr(namedAttr.getName(), namedAttr.getValue());
