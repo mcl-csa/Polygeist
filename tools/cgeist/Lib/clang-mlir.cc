@@ -356,29 +356,6 @@ void MLIRScanner::init(mlir::func::FuncOp function, const FunctionDecl *fd) {
 
 mlir::OpBuilder &MLIRScanner::getBuilder() { return builder; }
 
-void processAllocaOp(llvm::SmallVector<HLSInfo, 4> allocaInfoList,
-                     memref::AllocaOp alloca) {
-  Builder builder(alloca);
-  llvm::SmallVector<int64_t, 4> partitionDims;
-  for (auto info : allocaInfoList) {
-    if (std::holds_alternative<HLSStorageInfo>(info.v)) {
-      auto storageInfo = std::get<HLSStorageInfo>(info.v);
-      alloca->setAttr("HLS_STORAGE_TYPE",
-                      builder.getStringAttr(storageInfo.type));
-      alloca->setAttr("HLS_STORAGE_IMPL",
-                      builder.getStringAttr(storageInfo.impl));
-      alloca->setAttr("HLS_STORAGE_LATENCY",
-                      builder.getI64IntegerAttr(storageInfo.latency));
-    } else if (std::holds_alternative<HLSArrayPartitionInfo>(info.v)) {
-      auto arrayPartitionInfo = std::get<HLSArrayPartitionInfo>(info.v);
-      partitionDims.push_back(arrayPartitionInfo.partitionDim);
-    }
-  }
-  if (partitionDims.size() > 0)
-    alloca->setAttr("HLS_ARRAY_PARTITION_DIMS",
-                    builder.getI64ArrayAttr(partitionDims));
-}
-
 mlir::Value MLIRScanner::createAllocOp(mlir::Type t, VarDecl *name,
                                        uint64_t memspace, bool isArray = false,
                                        bool LLVMABI = false) {
@@ -468,8 +445,9 @@ mlir::Value MLIRScanner::createAllocOp(mlir::Type t, VarDecl *name,
           wrapIntegerMemorySpace(memspace, mt.getContext()));
       auto allocaOp = abuilder.create<mlir::memref::AllocaOp>(varLoc, mr);
       if (name) {
-        auto allocaInfoList = Glob.hlsInfoList.getNamedPragmas(name->getName());
-        processAllocaOp(allocaInfoList, allocaOp);
+        auto allocaInfoList = Glob.hlsInfoList.getVarPragmas(name->getName());
+        for (auto namedAttr : getHLSNamedAttrs(builder, allocaInfoList))
+          allocaOp->setAttr(namedAttr.getName(), namedAttr.getValue());
       }
       alloc = allocaOp;
       if (memspace != 0) {
@@ -4845,15 +4823,12 @@ MLIRASTConsumer::GetOrCreateMLIRFunction(const FunctionDecl *FD,
   attrs.set("llvm.linkage",
             mlir::LLVM::LinkageAttr::get(builder.getContext(), lnk));
   function->setAttrs(attrs.getDictionary(builder.getContext()));
+
+  // HLS related attributes.
   function->setAttr("argNames", builder.getStrArrayAttr(argNames));
-  auto infoList = this->hlsInfoList.getNamedPragmas(FD->getName());
-  for (HLSInfo info : infoList) {
-    if (std::holds_alternative<HLSExternFuncInfo>(info.v)) {
-      auto externFuncInfo = std::get<HLSExternFuncInfo>(info.v);
-      function->setAttr("HLS_EXTERN_FUNC_LATENCY",
-                        builder.getI64IntegerAttr(externFuncInfo.latency));
-    }
-  }
+  auto infoList = this->hlsInfoList.getVarPragmas(FD->getName());
+  for (auto namedAttr : getHLSNamedAttrs(builder, infoList))
+    function->setAttr(namedAttr.getName(), namedAttr.getValue());
 
   functions[name] = function;
   module->push_back(function);

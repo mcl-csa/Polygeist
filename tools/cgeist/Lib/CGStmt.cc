@@ -205,19 +205,8 @@ void MLIRScanner::buildAffineLoopImpl(
   // Add pragma HLS attributes.
   auto infoList = Glob.hlsInfoList.extractRegionPragmas(fors->getBeginLoc(),
                                                         fors->getEndLoc());
-  for (auto info : infoList) {
-    if (std::holds_alternative<HLSUnrollInfo>(info.v)) {
-      affineOp->setAttr(
-          "HLS_UNROLL",
-          builder.getI64IntegerAttr(std::get<HLSUnrollInfo>(info.v).factor));
-    }
-    if (std::holds_alternative<HLSPipelineInfo>(info.v)) {
-      affineOp->setAttr(
-          "HLS_PIPELINE",
-          builder.getI64IntegerAttr(
-              std::get<HLSPipelineInfo>(info.v).initiationInterval));
-    }
-  }
+  for (auto namedAttr : getHLSNamedAttrs(builder, infoList))
+    affineOp->setAttr(namedAttr.getName(), namedAttr.getValue());
 }
 
 void MLIRScanner::buildAffineLoop(

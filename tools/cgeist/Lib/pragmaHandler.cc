@@ -24,6 +24,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include <clang/Basic/DiagnosticLex.h>
 #include <clang/Basic/DiagnosticParse.h>
+#include <variant>
 
 using namespace clang;
 using namespace llvm;
@@ -236,6 +237,33 @@ struct PragmaEndScopHandler : public PragmaHandler {
     scops.addEnd(SM, loc);
   }
 };
+SmallVector<std::pair<std::string, AttrKind>, 4>
+parsePragmaAttrs(clang::Preprocessor &PP, clang::Token &currentTok,
+                 std::string &prepend) {
+  SmallVector<std::pair<std::string, AttrKind>, 4> out;
+  while (true) {
+    PP.Lex(currentTok); // key
+    if (!currentTok.isAnyIdentifier())
+      break;
+    std::string key =
+        prepend + currentTok.getIdentifierInfo()->getName().upper();
+    PP.Lex(currentTok); //=
+    assert(currentTok.is(tok::TokenKind::equal));
+    PP.Lex(currentTok); // value
+    AttrKind value;
+    if (currentTok.isLiteral()) {
+      auto s = std::string(currentTok.getLiteralData());
+      value = std::stoi(s);
+    } else if (currentTok.isAnyIdentifier()) {
+      auto s = currentTok.getIdentifierInfo()->getName().str();
+      value = s;
+    } else {
+      assert(false && "unreachable.");
+    }
+    out.push_back(std::make_pair(key, value));
+  }
+  return out;
+}
 
 struct PragmaHLSHandler : public PragmaHandler {
   HLSInfoList &infoList;
@@ -248,69 +276,29 @@ struct PragmaHLSHandler : public PragmaHandler {
 
     PP.Lex(hlsTok);
     auto pragmaName = hlsTok.getIdentifierInfo()->getName().upper();
-    if (pragmaName == "UNROLL") {
-      HLSUnrollInfo info(loc, 0); // unroll factor 0 means unroll everything.
-      infoList.addPragmaInfo(HLSInfo(info));
-    } else if (pragmaName == "PIPELINE") {
-      PP.Lex(hlsTok);
-      assert(hlsTok.getIdentifierInfo()->getName() == "II");
-      PP.Lex(hlsTok);
-      assert(hlsTok.is(tok::TokenKind::equal));
-      PP.Lex(hlsTok);
-      auto strII = std::string(hlsTok.getLiteralData());
-      int ii = std::stoi(strII);
-      HLSPipelineInfo info(loc, ii);
-      assert(ii > 0);
-      infoList.addPragmaInfo(HLSInfo(info));
-    } else if (pragmaName == "BIND_STORAGE") {
-      PP.Lex(hlsTok); // variable
-      PP.Lex(hlsTok); //=
-      PP.Lex(hlsTok); //<variable name>
-      auto name = hlsTok.getIdentifierInfo()->getName();
+    std::string prepend = "HLS_" + pragmaName + "_";
+    SmallVector<std::pair<std::string, AttrKind>, 4> attrs =
+        parsePragmaAttrs(PP, hlsTok, prepend);
+    if (pragmaName == "UNROLL" || pragmaName == "PIPELINE") {
+      HLSPragmaInfo info(RegionPragma(loc), attrs);
+      infoList.addPragmaInfo(info);
+    } else if (pragmaName == "BIND_STORAGE" ||
+               pragmaName == "ARRAY_PARTITION" || pragmaName == "EXTERN_FUNC") {
+      std::optional<std::string> name;
+      for (auto kv : attrs) {
+        if (kv.first == prepend + "VARIABLE" &&
+            std::holds_alternative<std::string>(kv.second))
+          name = std::get<std::string>(kv.second);
+      }
+      if (!name.has_value())
+        PP.Diag(hlsTok, diag::err_expected) << " variable=<variable name>";
 
-      PP.Lex(hlsTok); // type
-      PP.Lex(hlsTok); //=
-      PP.Lex(hlsTok); //<memory type>
-      auto type = hlsTok.getIdentifierInfo()->getName().lower();
-
-      PP.Lex(hlsTok); // impl
-      PP.Lex(hlsTok); //=
-      PP.Lex(hlsTok); //=<impl>
-      auto impl = hlsTok.getIdentifierInfo()->getName().lower();
-
-      PP.Lex(hlsTok); // latency
-      PP.Lex(hlsTok); //=
-      PP.Lex(hlsTok); //<latency>
-      auto latency = std::stoi(hlsTok.getLiteralData());
-
-      HLSStorageInfo info(loc, name, type, impl, latency);
-      infoList.addPragmaInfo(HLSInfo(info));
-    } else if (pragmaName == "ARRAY_PARTITION") {
-
-      PP.Lex(hlsTok); // variable
-      PP.Lex(hlsTok); // =
-      PP.Lex(hlsTok); // <name>
-      auto name = hlsTok.getIdentifierInfo()->getName();
-      PP.Lex(hlsTok); // dim
-      PP.Lex(hlsTok); // =
-      PP.Lex(hlsTok); // <dim>
-      auto dim = std::stoi(hlsTok.getLiteralData());
-      HLSArrayPartitionInfo info(loc, name, dim);
-      infoList.addPragmaInfo(HLSInfo(info));
-    } else if (pragmaName == "EXTERN_FUNC") {
-      PP.Lex(hlsTok); // variable
-      PP.Lex(hlsTok); // =
-      PP.Lex(hlsTok); // <func name>
-      auto name = hlsTok.getIdentifierInfo()->getName();
-      PP.Lex(hlsTok); // latency
-      PP.Lex(hlsTok); // =
-      PP.Lex(hlsTok); // <latency>
-      auto latency = std::stoi(hlsTok.getLiteralData());
-      HLSExternFuncInfo info(loc, name, latency);
-      infoList.addPragmaInfo(HLSInfo(info));
+      HLSPragmaInfo info(VarPragma(*name), attrs);
+      infoList.addPragmaInfo(info);
     } else {
       PP.Diag(hlsTok.getLocation(), diag::warn_pragma_expected_identifier)
-          << "HLS UNROLL | PIPELINE | BIND_STORAGE | ARRAY_PARTITION.";
+          << "HLS UNROLL | PIPELINE | BIND_STORAGE | ARRAY_PARTITION | "
+             "EXTERN_FUNC.";
     }
   }
 };
