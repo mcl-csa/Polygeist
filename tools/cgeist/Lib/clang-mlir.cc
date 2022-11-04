@@ -425,8 +425,7 @@ mlir::Value MLIRScanner::createAllocOp(mlir::Type t, VarDecl *name,
             wrapIntegerMemorySpace(memspace, mt.getContext()));
         auto len = Visit(var->getSizeExpr()).getValue(varLoc, builder);
         len = builder.create<IndexCastOp>(varLoc, builder.getIndexType(), len);
-        auto allocaOp = builder.create<mlir::memref::AllocaOp>(varLoc, mr, len);
-        alloc = allocaOp;
+        alloc = builder.create<mlir::memref::AllocaOp>(varLoc, mr, len);
         builder.create<polygeist::TrivialUseOp>(varLoc, alloc);
         if (memspace != 0) {
           alloc = abuilder.create<polygeist::Pointer2MemrefOp>(
@@ -449,6 +448,13 @@ mlir::Value MLIRScanner::createAllocOp(mlir::Type t, VarDecl *name,
         for (auto namedAttr : getHLSNamedAttrs(builder, allocaInfoList))
           allocaOp->setAttr(namedAttr.getName(), namedAttr.getValue());
       }
+      if (!allocaOp->getAttrOfType<mlir::StringAttr>("hls.BIND_STORAGE_TYPE") &&
+          !allocaOp->getAttrOfType<mlir::StringAttr>(
+              "hls.INTERFACE_STORAGE_TYPE")) {
+        llvm::errs() << "Could not find storage type pragma for variable"
+                     << name;
+      }
+
       alloc = allocaOp;
       if (memspace != 0) {
         alloc = abuilder.create<polygeist::Pointer2MemrefOp>(
@@ -4825,15 +4831,29 @@ MLIRASTConsumer::GetOrCreateMLIRFunction(const FunctionDecl *FD,
   function->setAttrs(attrs.getDictionary(builder.getContext()));
 
   // HLS related attributes.
-  function->setAttr("argNames", builder.getStrArrayAttr(argNames));
+  function->setAttr("hwAccel", builder.getUnitAttr());
   llvm::SmallVector<mlir::Attribute> argAttrs;
   for (auto name : argNames) {
     auto argInfoList = this->hlsInfoList.getVarPragmas(name);
-    auto argAttr =
-        builder.getDictionaryAttr(getHLSNamedAttrs(builder, argInfoList));
+    DictionaryAttr argAttr;
+    if (argInfoList.size())
+      argAttr =
+          builder.getDictionaryAttr(getHLSNamedAttrs(builder, argInfoList));
+    else
+      argAttr = builder.getDictionaryAttr(builder.getNamedAttr(
+          "hls.INTERFACE_LATENCY", builder.getI64IntegerAttr(0)));
     argAttrs.push_back(argAttr);
   }
   function->setAttr("arg_attrs", builder.getArrayAttr(argAttrs));
+  // argNames.push_back("t");
+  function->setAttr("argNames", builder.getStrArrayAttr(argNames));
+  SmallVector<mlir::Attribute> resultNames;
+  for (size_t i = 0; i < function.getNumResults(); i++) {
+    resultNames.push_back(builder.getStringAttr(
+        function.getNumResults() > 1 ? "out" + std::to_string(i) : "out"));
+  }
+  function->setAttr("resultNames", builder.getArrayAttr(resultNames));
+
   auto infoList = this->hlsInfoList.getVarPragmas(FD->getName());
   int latency = 0;
   for (auto kv : infoList) {
@@ -4848,7 +4868,7 @@ MLIRASTConsumer::GetOrCreateMLIRFunction(const FunctionDecl *FD,
         "hls.INTERFACE_LATENCY", builder.getI64IntegerAttr(latency))));
   }
   if (resultAttrs.size() > 0)
-    function->setAttr("result_attrs", builder.getArrayAttr(resultAttrs));
+    function->setAttr("res_attrs", builder.getArrayAttr(resultAttrs));
 
   functions[name] = function;
   module->push_back(function);
