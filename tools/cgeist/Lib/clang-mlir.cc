@@ -448,12 +448,6 @@ mlir::Value MLIRScanner::createAllocOp(mlir::Type t, VarDecl *name,
         for (auto namedAttr : getHLSNamedAttrs(builder, allocaInfoList))
           allocaOp->setAttr(namedAttr.getName(), namedAttr.getValue());
       }
-      if (!allocaOp->getAttrOfType<mlir::StringAttr>("hls.BIND_STORAGE_TYPE") &&
-          !allocaOp->getAttrOfType<mlir::StringAttr>(
-              "hls.INTERFACE_STORAGE_TYPE")) {
-        llvm::errs() << "Could not find storage type pragma for variable"
-                     << name;
-      }
 
       alloc = allocaOp;
       if (memspace != 0) {
