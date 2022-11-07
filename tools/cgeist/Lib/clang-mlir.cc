@@ -4825,7 +4825,7 @@ MLIRASTConsumer::GetOrCreateMLIRFunction(const FunctionDecl *FD,
   function->setAttrs(attrs.getDictionary(builder.getContext()));
 
   // HLS related attributes.
-  function->setAttr("hwAccel", builder.getUnitAttr());
+  // function->setAttr("hwAccel", builder.getUnitAttr());
   llvm::SmallVector<mlir::Attribute> argAttrs;
   for (auto name : argNames) {
     auto argInfoList = this->hlsInfoList.getVarPragmas(name);
