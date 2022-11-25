@@ -284,7 +284,7 @@ struct PragmaHLSHandler : public PragmaHandler {
       infoList.addPragmaInfo(info);
     } else if (pragmaName == "BIND_STORAGE" ||
                pragmaName == "ARRAY_PARTITION" || pragmaName == "EXTERN_FUNC") {
-      std::optional<std::string> name;
+      Optional<std::string> name;
       for (auto kv : attrs) {
         if (kv.first == prepend + "VARIABLE" &&
             std::holds_alternative<std::string>(kv.second))
@@ -296,7 +296,7 @@ struct PragmaHLSHandler : public PragmaHandler {
       HLSPragmaInfo info(VarPragma(*name), attrs);
       infoList.addPragmaInfo(info);
     } else if (pragmaName == "INTERFACE") {
-      std::optional<std::string> name;
+      Optional<std::string> name;
       for (auto kv : attrs) {
         if (kv.first == prepend + "PORT" &&
             std::holds_alternative<std::string>(kv.second))
